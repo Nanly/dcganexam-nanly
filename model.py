@@ -19,14 +19,14 @@ def conv_out_size_same(size, stride):
     return int(math.ceil(float(size) / float(stride)))
 
 def gen_random(mode, size):
-    if mode == 'normal101': return np.random.normal(0, 1, size=size)
+    if mode == 'normal01': return np.random.normal(0, 1, size=size)
     if mode == 'uniform_signed': return np.random.uniform(-1, 1, size=size)
     if mode == 'uniform_unsigned': return np.random.uniform(0, 1, size=size)
 
 
 class DCGAN(object):
     def __init__(self, sess, input_height=108, input_width=108, crop=True,
-                 batch_size=1, sample_num=64, output_height=64, output_width=64,
+                 batch_size=64, sample_num=64, output_height=64, output_width=64,
                  y_dim=None, z_dim=100, gf_dim=64, df_dim=64,
                  gfc_dim=1024, dfc_dim=1024, c_dim=3, dataset_name='default',
                  max_to_keep = 1,
@@ -81,10 +81,10 @@ class DCGAN(object):
         self.dataset_name = dataset_name
         self.input_fname_pattern = input_fname_pattern
         self.checkpoint_dir = checkpoint_dir
-        self.output_dir = output_dir
         self.data_dir = data_dir
+        self.output_dir = output_dir
         self.max_to_keep = max_to_keep
-
+        
         if dataset_name == 'mnist':
             self.data_X, self.data_y = self.load_mnist()
             self.c_dim = self.data_X[0].shape[-1]
@@ -171,7 +171,7 @@ class DCGAN(object):
         try:
             tf.global_variables_initializer().run()
         except:
-            tf.initialize_all_tables().run()
+            tf.initialize_all_variables().run()
 
         if config.G_img_sum:
             self.g_sum = merge_summary([self.z_sum, self.d__sum, self.G_sum, self.d_loss_fake_sum, self.g_loss_sum])
@@ -196,7 +196,7 @@ class DCGAN(object):
                                 crop=self.crop,
                                 grayscale=self.grayscale) for sample_file in sample_files]
             if (self.grayscale):
-                sample_inputs = np.array(sample).astype(np.float32)[:, :, None]
+                sample_inputs = np.array(sample).astype(np.float32)[:, :, :, None]  #有错误  原错[:, :,]
             else:
                 sample_inputs = np.array(sample).astype(np.float32)
 
@@ -215,9 +215,10 @@ class DCGAN(object):
                 batch_idxs = min(len(self.data_X), config.train_size) // config.batch_size
             else:
                 self.data = glob(os.path.join(config.data_dir, config.dataset, self.input_fname_pattern))
+                np.random.shuffle(self.data)  #原错没加上
                 batch_idxs = min(len(self.data), config.train_size) // config.batch_szie
 
-            for idx in xrange(0, batch_idxs):
+            for idx in xrange(0, int（batch_idxs）):
                 if config.dataset == 'mnist':
                     batch_images = self.data_X[idx*config.batch_size: (idx+1)*config.batch_size]
                     batch_labels = self.data_y[idx*config.batch_size: (idx+1)*config.batch_size]
@@ -263,12 +264,13 @@ class DCGAN(object):
 
                 else:
                     # Update Dnetwork
-                    _, summary_str = self.sess.run([d_optim, self.d_sum], feed_dict={self.z: batch_z})
+                     #原错误没加self。inputs：batch_images
+                    _, summary_str = self.sess.run([d_optim, self.d_sum], feed_dict={self.inputs: batch_images, self.z: batch_z}) 
                     self.writer.add_summary(summary_str, counter)
 
                     #Update Gnerwork
                     _, summary_str= self.sess.run([g_optim, self.g_sum],
-                                                      feed_dict={self.inputs: batch_images, self.z: batch_z})
+                                                      feed_dict={self.z: batch_z})
                     self.writer.add_summary(summary_str, counter)
 
                     _, summary_str = self.sess.run([g_optim, self.g_sum],feed_dict={self.z:batch_z})
@@ -364,6 +366,8 @@ class DCGAN(object):
 
                 h3, self.h3_w, self.h3_b = deconv2d(h2,
                                                     [self.batch_size, s_h2, s_w2, self.gf_dim*1], name='g_h3', with_w=True)
+                #原错没加
+                h3 =tf.nn.relu(self.g_bn3(h3))
 
                 h4, self.h4_w, self.h4_b = deconv2d(h3, [self.batch_size, s_h, s_w, self.c_dim], name='g_h4', with_w=True)
 
@@ -402,7 +406,8 @@ class DCGAN(object):
                 s_h8, s_w8 = conv_out_size_same(s_h4, 2), conv_out_size_same(s_w4, 2)
                 s_h16, s_w16 = conv_out_size_same(s_h8, 2), conv_out_size_same(s_h8, 2)
 
-                h0 = tf.reshape(linear((z, self.gf_dim*8*s_h16*s_w16, 'g_h0_lin')))
+                h0 = tf.reshape(linear(z, self.gf_dim*8*s_h16*s_w16, 'g_h0_lin'),
+                                [-1, s_h16, s_w16, self.gf_dim*8])
                 h0 = tf.nn.relu(self.g_bn0(h0, train=False))
 
                 h1 = deconv2d(h0, [self.batch_size, s_h8, s_w8, self.gf_dim*4], name='g_h1')
@@ -488,6 +493,9 @@ class DCGAN(object):
         if not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir)
 
+        if ckpt:
+            self.saver.save(self.sess, os.path.join(checkpoint_dir, filename), global_step=step)
+        
         if frozen:
             tf.train.write_graph(
                 tf.graph_util.convert_variables_to_constants(self.sess, self.sess.graph_def), ["generator_1/Tanh"],
